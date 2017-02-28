@@ -1,0 +1,184 @@
+abstract class MultipartUtility<AR> {
+    private static final Logger log = getLogger(MultipartUtility.class
+            .getName());
+    private static final String TAG = MultipartUtility.class
+            .getName();
+    //private final static MediaType MEDIA_TYPE_All = MediaType.parse("image/*");
+    private Context context;
+
+    MultipartUtility(Context context) {
+        this.context = context;
+    }
+
+    JSONObject getRequest(String urlString, final Map<String, String> params) {
+        try {
+            HttpUrl.Builder urlBuilder = HttpUrl.parse(urlString).newBuilder();
+            for (Map.Entry<String, String> entry : params.entrySet()) {
+                urlBuilder.addQueryParameter(entry.getKey(), entry.getValue());
+            }
+            String url = urlBuilder.build().toString();
+            Log.w(TAG, url);
+            Request request = new Request.Builder()
+                    .url(url)
+                    .addHeader("cache-control", "no-cache")
+                    .addHeader(HttpHeaders.AUTHORIZATION, getBasicAuthString())
+                    .build();
+
+            OkHttpClient client = new OkHttpClient();
+            /// client.setAuthenticator(authenticator);
+            client.setReadTimeout(ServerApiRequest.MAX_CONNECTION_TIME_OUT, TimeUnit.MILLISECONDS);
+            client.setConnectTimeout(ServerApiRequest.MAX_CONNECTION_TIME_OUT, TimeUnit.MILLISECONDS);
+            Response response = client.newCall(request).execute();
+            return new JSONObject(response.body().string());
+        } catch (Exception e) {
+            e.printStackTrace();
+            Log.e(TAG, "Other Error: " + e.getLocalizedMessage());
+        }
+        return null;
+    }
+
+    JSONObject postRequest(String urlString, final Map<String, String> params) {
+        try {
+            FormEncodingBuilder formEncodingBuilder = new FormEncodingBuilder();
+            for (Map.Entry<String, String> entry : params.entrySet()) {
+                formEncodingBuilder.add(entry.getKey(), entry.getValue());
+            }
+            RequestBody requestBody = formEncodingBuilder.build();
+
+            Log.w(TAG, getBasicAuthString());
+
+            Request request = new Request.Builder()
+                    .url(urlString)
+                    .post(requestBody)
+                    .addHeader("cache-control", "no-cache")
+                    .addHeader(HttpHeaders.AUTHORIZATION, getBasicAuthString())
+                    .build();
+
+            OkHttpClient client = new OkHttpClient();
+            /// client.setAuthenticator(authenticator);
+            client.setReadTimeout(ServerApiRequest.MAX_CONNECTION_TIME_OUT, TimeUnit.MILLISECONDS);
+            client.setConnectTimeout(ServerApiRequest.MAX_CONNECTION_TIME_OUT, TimeUnit.MILLISECONDS);
+            Response response = client.newCall(request).execute();
+
+            return new JSONObject(response.body().string());
+        } catch (Exception e) {
+            e.printStackTrace();
+            Log.e(TAG, "Other Error: " + e.getLocalizedMessage());
+        }
+        return null;
+    }
+
+    public JSONObject postRequestFormData(String urlString, final Map<String, String> params) {
+        return postRequestFormData(urlString, params, null);
+    }
+
+    JSONObject postRequestFormData(String urlString, final Map<String, String> params, AR uploadFiles) {
+        return postRequestFormData(urlString, params, uploadFiles, null);
+    }
+
+    JSONObject postRequestFormData(String urlString, final Map<String, String> params,
+                                   AR uploadFiles, MediaProgressListener listener) {
+        try {
+            MultipartBuilder multipartBuilder = new MultipartBuilder();
+            multipartBuilder.type(MultipartBuilder.FORM);
+
+            for (Map.Entry<String, String> entry : params.entrySet()) {
+                multipartBuilder.addFormDataPart(entry.getKey(), entry.getValue());
+            }
+
+            if (uploadFiles != null) {
+                if (uploadFiles instanceof ArrayList) {
+                    ArrayList<FileData> fileDatas = (ArrayList) uploadFiles;
+                    for (FileData fileData : fileDatas) {
+                        CountingFileRequestBody countingFileRequestBody =
+                                new CountingFileRequestBody(fileData.getFile(), MediaType.parse(fileData.getMimeType()), listener);
+                        multipartBuilder.addFormDataPart(fileData.getParamName(), fileData.getFile().getName(), countingFileRequestBody);
+                    }
+                } else if (uploadFiles instanceof FileData) {
+                    FileData fileData = (FileData) uploadFiles;
+                    CountingFileRequestBody countingFileRequestBody =
+                            new CountingFileRequestBody(fileData.getFile(), MediaType.parse(fileData.getMimeType()), listener);
+                    multipartBuilder.addFormDataPart(fileData.getParamName(), fileData.getFile().getName(), countingFileRequestBody);
+                }
+            }
+
+            RequestBody requestBody = multipartBuilder.build();
+
+            Log.w(TAG, getBasicAuthString());
+
+            Request request = new Request.Builder()
+                    .url(getServerUrl() + urlString)
+                    .post(requestBody)
+                    .addHeader("cache-control", "no-cache")
+                    .addHeader(HttpHeaders.AUTHORIZATION, getBasicAuthString())
+                    .build();
+
+            OkHttpClient client = new OkHttpClient();
+            /// client.setAuthenticator(authenticator);
+            client.setReadTimeout(ServerApiRequest.MAX_CONNECTION_TIME_OUT, TimeUnit.MILLISECONDS);
+            client.setConnectTimeout(ServerApiRequest.MAX_CONNECTION_TIME_OUT, TimeUnit.MILLISECONDS);
+            Response response = client.newCall(request).execute();
+
+            return new JSONObject(response.body().string());
+        } catch (Exception e) {
+            e.printStackTrace();
+            Log.e(TAG, "Other Error: " + e.getLocalizedMessage());
+        }
+        return null;
+    }
+
+    public Context getContext() {
+        return context;
+    }
+
+    abstract String getServerUrl();
+
+    abstract String getBasicAuthString();
+
+    private class CountingFileRequestBody extends RequestBody {
+        private final String TAG = CountingFileRequestBody.class.getSimpleName();
+
+        private static final int SEGMENT_SIZE = 2048; // okio.Segment.SIZE
+
+        private final File file;
+        private final MediaProgressListener listener;
+        private final MediaType contentType;
+
+        CountingFileRequestBody(File file, MediaType contentType, MediaProgressListener listener) {
+            this.file = file;
+            this.contentType = contentType;
+            this.listener = listener;
+        }
+
+        @Override
+        public long contentLength() {
+            return file.length();
+        }
+
+        @Override
+        public MediaType contentType() {
+            return contentType;
+        }
+
+        @Override
+        public void writeTo(BufferedSink sink) throws IOException {
+            Source source = null;
+            try {
+                source = Okio.source(file);
+                int total = 0;
+                long read;
+                long totalSize = file.length();
+                while ((read = source.read(sink.buffer(), SEGMENT_SIZE)) != -1) {
+                    total += read;
+                    sink.flush();
+                    if (this.listener != null) {
+                        this.listener.transferred((int) (100 * (total / (float) totalSize)));
+                    }
+                    // Log.w(TAG, "total : " + (int) (100 * (total / (float) totalSize)));
+                }
+            } finally {
+                Util.closeQuietly(source);
+            }
+        }
+    }
+}
